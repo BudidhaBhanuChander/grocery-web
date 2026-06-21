@@ -22,7 +22,7 @@ const Login = () => {
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
 
-    // phone OTP fields
+    // phone OTP fields — always +91, user types only 10 digits
     const [phone, setPhone] = useState("");
     const [otp, setOtp] = useState("");
     const [otpSent, setOtpSent] = useState(false);
@@ -31,7 +31,7 @@ const Login = () => {
     const recaptchaRef = useRef<HTMLDivElement>(null);
 
     const navigate = useNavigate();
-    const { login, register, setUserFromToken } = useAuth();
+    const { login, register } = useAuth();
 
     // ── Email / Password ──────────────────────────────────────────────
     const handleEmailSubmit = async (e: React.FormEvent) => {
@@ -68,9 +68,8 @@ const Login = () => {
                 const { data } = await api.post("/auth/google", { idToken: tokenResponse.access_token });
                 localStorage.setItem("auth_token", data.token);
                 localStorage.setItem("auth_user", JSON.stringify(data.user));
-                setUserFromToken(data.user, data.token);
                 toast.success(`Welcome, ${data.user.name}!`);
-                navigate("/");
+                window.location.href = "/";
             } catch (err: any) {
                 toast.error(err.response?.data?.message || "Google sign-in failed");
             }
@@ -90,9 +89,8 @@ const Login = () => {
     };
 
     const handleSendOtp = async () => {
-        const digits = phone.replace(/\D/g, "");
-        if (digits.length < 10) { toast.error("Enter a valid phone number"); return; }
-        const formatted = phone.startsWith("+") ? phone : `+91${digits}`;
+        if (phone.length !== 10) { toast.error("Enter a valid 10-digit phone number"); return; }
+        const formatted = `+91${phone}`;
         setPhoneLoading(true);
         try {
             const verifier = setupRecaptcha();
@@ -117,12 +115,10 @@ const Login = () => {
             const { data } = await api.post("/auth/phone", { idToken });
             localStorage.setItem("auth_token", data.token);
             localStorage.setItem("auth_user", JSON.stringify(data.user));
-            setUserFromToken(data.user, data.token);
             toast.success("Phone login successful!");
-            navigate("/");
+            window.location.href = "/";
         } catch (err: any) {
             toast.error(err.response?.data?.message || "Invalid OTP. Try again.");
-        } finally {
             setPhoneLoading(false);
         }
     };
@@ -217,19 +213,26 @@ const Login = () => {
                                 <>
                                     <label className="text-sm flex flex-col gap-1">
                                         Phone Number
-                                        <div className="relative">
-                                            <PhoneIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-app-text-light" />
+                                        <div className="flex items-center bg-white rounded-xl border border-app-border focus-within:border-app-green focus-within:ring-2 focus-within:ring-app-green/20 transition-all overflow-hidden">
+                                            <span className="flex items-center gap-1.5 pl-3.5 pr-2 border-r border-app-border text-sm font-medium text-app-text shrink-0">
+                                                <PhoneIcon className="size-4 text-app-text-light" />
+                                                +91
+                                            </span>
                                             <input
                                                 type="tel"
+                                                inputMode="numeric"
                                                 value={phone}
-                                                onChange={(e) => setPhone(e.target.value)}
-                                                placeholder="+91 9999999999"
-                                                className="w-full pl-11 pr-4 py-3 text-sm bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all"
+                                                onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                                                placeholder="9999999999"
+                                                maxLength={10}
+                                                className="flex-1 px-3 py-3 text-sm bg-transparent outline-none"
                                             />
+                                            <span className={`pr-3 text-xs font-medium shrink-0 ${phone.length === 10 ? "text-app-green" : "text-app-text-light"}`}>
+                                                {phone.length}/10
+                                            </span>
                                         </div>
-                                        <span className="text-xs text-app-text-light">Include country code e.g. +91 for India</span>
                                     </label>
-                                    <button onClick={handleSendOtp} disabled={phoneLoading} className="btn-green w-full !rounded-xl disabled:opacity-50">
+                                    <button onClick={handleSendOtp} disabled={phoneLoading || phone.length !== 10} className="btn-green w-full !rounded-xl disabled:opacity-50">
                                         {phoneLoading ? <Loader2Icon className="animate-spin" /> : "Send OTP"}
                                     </button>
                                 </>
