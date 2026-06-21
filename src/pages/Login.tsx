@@ -31,7 +31,7 @@ const Login = () => {
     const recaptchaRef = useRef<HTMLDivElement>(null);
 
     const navigate = useNavigate();
-    const { login, register } = useAuth();
+    const { login, register, setUserFromToken } = useAuth();
 
     // ── Email / Password ──────────────────────────────────────────────
     const handleEmailSubmit = async (e: React.FormEvent) => {
@@ -66,10 +66,9 @@ const Login = () => {
             try {
                 // Send access token to backend
                 const { data } = await api.post("/auth/google", { idToken: tokenResponse.access_token });
-                localStorage.setItem("auth_token", data.token);
-                localStorage.setItem("auth_user", JSON.stringify(data.user));
+                setUserFromToken(data.user, data.token);
                 toast.success(`Welcome, ${data.user.name}!`);
-                window.location.href = "/";
+                navigate("/");
             } catch (err: any) {
                 toast.error(err.response?.data?.message || "Google sign-in failed");
             }
@@ -113,10 +112,9 @@ const Login = () => {
             const credential = await confirmResult.confirm(otp);
             const idToken = await credential.user.getIdToken();
             const { data } = await api.post("/auth/phone", { idToken });
-            localStorage.setItem("auth_token", data.token);
-            localStorage.setItem("auth_user", JSON.stringify(data.user));
+            setUserFromToken(data.user, data.token);
             toast.success("Phone login successful!");
-            window.location.href = "/";
+            navigate("/");
         } catch (err: any) {
             toast.error(err.response?.data?.message || "Invalid OTP. Try again.");
             setPhoneLoading(false);
