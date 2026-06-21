@@ -1,23 +1,40 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { heroSectionData } from "../assets/assets";
-import { Link } from "react-router-dom";
-import { BikeIcon, Loader2Icon, LockIcon, MailIcon, UserIcon } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { BikeIcon, ChevronLeftIcon, Loader2Icon, LockIcon, MailIcon, PhoneIcon, UserIcon } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import toast from "react-hot-toast";
 import deliveryApi from "../config/deliveryApi";
-import { useNavigate } from "react-router-dom";
+import api from "../config/api";
+import { useGoogleLogin } from "@react-oauth/google";
+import { auth } from "../lib/firebase";
+import { RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from "firebase/auth";
+
+type Tab = "email" | "phone";
 
 const Login = () => {
     const [isLoginState, setIsLoginState] = useState(true);
+    const [activeTab, setActiveTab] = useState<Tab>("email");
+
+    // email/password fields
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
 
-    const navigate = useNavigate();
-    const { login, register } = useAuth();
+    // phone OTP fields
+    const [phone, setPhone] = useState("");
+    const [otp, setOtp] = useState("");
+    const [otpSent, setOtpSent] = useState(false);
+    const [phoneLoading, setPhoneLoading] = useState(false);
+    const [confirmResult, setConfirmResult] = useState<ConfirmationResult | null>(null);
+    const recaptchaRef = useRef<HTMLDivElement>(null);
 
-    const handleSubmit = async (e: React.SubmitEvent) => {
+    const navigate = useNavigate();
+    const { login, register, setUserFromToken } = useAuth();
+
+    // ── Email / Password ──────────────────────────────────────────────
+    const handleEmailSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
         try {
@@ -43,6 +60,73 @@ const Login = () => {
         }
     };
 
+    // ── Google Sign-In ────────────────────────────────────────────────
+    const handleGoogleLogin = useGoogleLogin({
+        onSuccess: async (tokenResponse) => {
+            try {
+                // Send access token to backend
+                const { data } = await api.post("/auth/google", { idToken: tokenResponse.access_token });
+                localStorage.setItem("auth_token", data.token);
+                localStorage.setItem("auth_user", JSON.stringify(data.user));
+                setUserFromToken(data.user, data.token);
+                toast.success(`Welcome, ${data.user.name}!`);
+                navigate("/");
+            } catch (err: any) {
+                toast.error(err.response?.data?.message || "Google sign-in failed");
+            }
+        },
+        onError: () => toast.error("Google sign-in was cancelled"),
+    });
+
+    // ── Phone OTP ─────────────────────────────────────────────────────
+    const setupRecaptcha = () => {
+        if (!(window as any).recaptchaVerifier) {
+            (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, "recaptcha-container", {
+                size: "invisible",
+                callback: () => {},
+            });
+        }
+        return (window as any).recaptchaVerifier as RecaptchaVerifier;
+    };
+
+    const handleSendOtp = async () => {
+        const digits = phone.replace(/\D/g, "");
+        if (digits.length < 10) { toast.error("Enter a valid phone number"); return; }
+        const formatted = phone.startsWith("+") ? phone : `+91${digits}`;
+        setPhoneLoading(true);
+        try {
+            const verifier = setupRecaptcha();
+            const result = await signInWithPhoneNumber(auth, formatted, verifier);
+            setConfirmResult(result);
+            setOtpSent(true);
+            toast.success(`OTP sent to ${formatted}`);
+        } catch (err: any) {
+            (window as any).recaptchaVerifier = null;
+            toast.error(err.message?.includes("too-many-requests") ? "Too many attempts. Try later." : "Failed to send OTP. Check the number.");
+        } finally {
+            setPhoneLoading(false);
+        }
+    };
+
+    const handleVerifyOtp = async () => {
+        if (!confirmResult || otp.length !== 6) { toast.error("Enter the 6-digit OTP"); return; }
+        setPhoneLoading(true);
+        try {
+            const credential = await confirmResult.confirm(otp);
+            const idToken = await credential.user.getIdToken();
+            const { data } = await api.post("/auth/phone", { idToken });
+            localStorage.setItem("auth_token", data.token);
+            localStorage.setItem("auth_user", JSON.stringify(data.user));
+            setUserFromToken(data.user, data.token);
+            toast.success("Phone login successful!");
+            navigate("/");
+        } catch (err: any) {
+            toast.error(err.response?.data?.message || "Invalid OTP. Try again.");
+        } finally {
+            setPhoneLoading(false);
+        }
+    };
+
     return (
         <div className="min-h-screen flex">
             {/* Left Side */}
@@ -56,10 +140,11 @@ const Login = () => {
                 </div>
             </div>
 
-            {/* LRight Side */}
+            {/* Right Side */}
             <div className="flex-1 flex-center px-4 py-12 bg-app-cream">
                 <div className="w-full max-w-md animate-scale-in">
-                    {/* form header message */}
+
+                    {/* Logo */}
                     <div className="text-center mb-8">
                         <Link to="/" className="inline-flex items-center gap-2 mb-6 group">
                             <span className="size-10 rounded-xl bg-gradient-to-br from-app-green-light to-app-green flex-center text-white shadow-glow-green group-hover:rotate-6 transition-transform">
@@ -67,45 +152,142 @@ const Login = () => {
                             </span>
                             <span className="text-2xl font-bold text-gradient-green">Instacart</span>
                         </Link>
-                        <h1 className="text-2xl font-semibold text-app-green mb-2">{isLoginState ? "Sign in to your account" : "Sign up for an account"}</h1>
-
+                        <h1 className="text-2xl font-semibold text-app-green mb-2">
+                            {isLoginState ? "Sign in to your account" : "Create your account"}
+                        </h1>
                         <p className="text-sm text-app-text-light">
                             {isLoginState ? "Don't have an account?" : "Already have an account?"}
-                            <button onClick={() => setIsLoginState(!isLoginState)} className="text-orange-500 ml-1 font-semibold hover:text-orange-600 transition-colors">
+                            <button onClick={() => { setIsLoginState(!isLoginState); setActiveTab("email"); }} className="text-orange-500 ml-1 font-semibold hover:text-orange-600 transition-colors">
                                 {isLoginState ? "Create one" : "Sign in"}
                             </button>
                         </p>
                     </div>
 
-                    {/* Login / Register Form */}
-                    <form onSubmit={handleSubmit} className="space-y-5">
-                        {!isLoginState && (
+                    {/* Tab switcher — only show on login */}
+                    {isLoginState && (
+                        <div className="flex bg-white rounded-xl p-1 mb-6 shadow-soft border border-app-border/60">
+                            {(["email", "phone"] as Tab[]).map((tab) => (
+                                <button
+                                    key={tab}
+                                    onClick={() => setActiveTab(tab)}
+                                    className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all capitalize ${activeTab === tab ? "bg-app-green text-white shadow-glow-green" : "text-app-text-light hover:text-app-green"}`}
+                                >
+                                    {tab === "email" ? "Email" : "Phone OTP"}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* ── Email / Password Form ── */}
+                    {(activeTab === "email" || !isLoginState) && (
+                        <form onSubmit={handleEmailSubmit} className="space-y-5">
+                            {!isLoginState && (
+                                <label className="text-sm flex flex-col gap-1">
+                                    Name
+                                    <div className="relative">
+                                        <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-app-text-light" />
+                                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Your name" className="w-full pl-11 pr-4 py-3 text-sm bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all" />
+                                    </div>
+                                </label>
+                            )}
                             <label className="text-sm flex flex-col gap-1">
-                                Name
+                                Email Address
                                 <div className="relative">
-                                    <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-app-text-light" />
-                                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Your name" className="w-full pl-11 pr-4 py-3 text-sm bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all" />
+                                    <MailIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-app-text-light" />
+                                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="you@example.com" className="w-full pl-11 pr-4 py-3 text-sm bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all" />
                                 </div>
                             </label>
-                        )}
-                        <label className="text-sm flex flex-col gap-1">
-                            Email Address
-                            <div className="relative">
-                                <MailIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-app-text-light" />
-                                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="you@example.com" className="w-full pl-11 pr-4 py-3 text-sm bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all" />
-                            </div>
-                        </label>
-                        <label className="text-sm flex flex-col gap-1">
-                            Password
-                            <div className="relative">
-                                <LockIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-app-text-light" />
-                                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className="w-full pl-11 pr-4 py-3 text-sm bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all" />
-                            </div>
-                        </label>
-                        <button type="submit" disabled={loading} className="btn-green w-full !rounded-xl disabled:opacity-50 disabled:hover:translate-y-0">
-                            {loading ? <Loader2Icon className="animate-spin" /> : isLoginState ? "Sign In" : "Sign Up"}
+                            <label className="text-sm flex flex-col gap-1">
+                                Password
+                                <div className="relative">
+                                    <LockIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-app-text-light" />
+                                    <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className="w-full pl-11 pr-4 py-3 text-sm bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all" />
+                                </div>
+                            </label>
+                            <button type="submit" disabled={loading} className="btn-green w-full !rounded-xl disabled:opacity-50">
+                                {loading ? <Loader2Icon className="animate-spin" /> : isLoginState ? "Sign In" : "Sign Up"}
+                            </button>
+                        </form>
+                    )}
+
+                    {/* ── Phone OTP Form ── */}
+                    {activeTab === "phone" && isLoginState && (
+                        <div className="space-y-4">
+                            {!otpSent ? (
+                                <>
+                                    <label className="text-sm flex flex-col gap-1">
+                                        Phone Number
+                                        <div className="relative">
+                                            <PhoneIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-app-text-light" />
+                                            <input
+                                                type="tel"
+                                                value={phone}
+                                                onChange={(e) => setPhone(e.target.value)}
+                                                placeholder="+91 9999999999"
+                                                className="w-full pl-11 pr-4 py-3 text-sm bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all"
+                                            />
+                                        </div>
+                                        <span className="text-xs text-app-text-light">Include country code e.g. +91 for India</span>
+                                    </label>
+                                    <button onClick={handleSendOtp} disabled={phoneLoading} className="btn-green w-full !rounded-xl disabled:opacity-50">
+                                        {phoneLoading ? <Loader2Icon className="animate-spin" /> : "Send OTP"}
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <button onClick={() => { setOtpSent(false); setOtp(""); }} className="p-1.5 hover:bg-app-cream rounded-lg transition-colors">
+                                            <ChevronLeftIcon className="size-4 text-app-text-light" />
+                                        </button>
+                                        <p className="text-sm text-app-text-light">OTP sent to <span className="font-medium text-app-text">{phone}</span></p>
+                                    </div>
+                                    <label className="text-sm flex flex-col gap-1">
+                                        Enter 6-digit OTP
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            maxLength={6}
+                                            value={otp}
+                                            onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+                                            placeholder="123456"
+                                            className="w-full px-4 py-3 text-sm text-center tracking-[0.5em] font-bold bg-white rounded-xl border border-app-border focus:border-app-green focus:ring-2 focus:ring-app-green/20 transition-all"
+                                        />
+                                    </label>
+                                    <button onClick={handleVerifyOtp} disabled={phoneLoading || otp.length !== 6} className="btn-green w-full !rounded-xl disabled:opacity-50">
+                                        {phoneLoading ? <Loader2Icon className="animate-spin" /> : "Verify & Sign In"}
+                                    </button>
+                                    <button onClick={handleSendOtp} disabled={phoneLoading} className="w-full text-sm text-app-text-light hover:text-app-green transition-colors">
+                                        Resend OTP
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ── Divider + Google ── */}
+                    <div className="mt-6">
+                        <div className="relative flex items-center gap-3 mb-4">
+                            <div className="flex-1 h-px bg-app-border" />
+                            <span className="text-xs text-app-text-light">or continue with</span>
+                            <div className="flex-1 h-px bg-app-border" />
+                        </div>
+
+                        <button
+                            onClick={() => handleGoogleLogin()}
+                            className="w-full flex items-center justify-center gap-3 py-3 px-4 bg-white border border-app-border rounded-xl text-sm font-medium text-app-text hover:border-app-green hover:bg-app-cream transition-all shadow-soft"
+                        >
+                            <svg className="size-5" viewBox="0 0 24 24">
+                                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+                                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+                                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+                            </svg>
+                            Continue with Google
                         </button>
-                    </form>
+                    </div>
+
+                    {/* invisible recaptcha anchor */}
+                    <div id="recaptcha-container" ref={recaptchaRef} />
                 </div>
             </div>
         </div>
